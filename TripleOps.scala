@@ -1,21 +1,194 @@
 package net.sansa_stack.examples.spark.rdf
 
+import org.apache.commons.compress.compressors.bzip2.{BZip2CompressorInputStream,BZip2CompressorOutputStream}
+import java.util.zip.{GZIPInputStream,GZIPOutputStream}
+import java.io._
+import scala.io.Codec
+import java.nio.charset.Charset
+
 
 import java.net.{URI => JavaURI}
-
 import net.sansa_stack.rdf.spark.io.NTripleReader
 import net.sansa_stack.rdf.spark.model.{JenaSparkRDDOps, TripleRDD}
 import org.apache.jena.graph.{Node, Node_URI}
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.SparkSession
-
+import scala.collection.JavaConversions
 import scala.collection.mutable
+
+
+import scala.language.implicitConversions
+import java.io.{Reader,BufferedReader}
+
+
+import java.io.{File, InputStream, OutputStream}
+
+import scala.util.Try
+
+/**
+  * Allows common handling of java.io.File and java.nio.file.Path
+  */
+abstract class FileLike[T] {
+
+  /**
+    * @return full path
+    */
+  def toString: String
+
+  /**
+    * @return file name, or null if file path has no parts
+    */
+  def name: String
+
+  def resolve(name: String): Try[T]
+
+  def names: List[String]
+
+  def list: List[T]
+
+  def exists: Boolean
+
+  @throws[java.io.IOException]("if file does not exist or cannot be deleted")
+  def delete(recursive: Boolean = false): Unit
+
+  def size(): Long
+
+  def isFile: Boolean
+
+  def isDirectory: Boolean
+
+  def hasFiles: Boolean
+
+  def inputStream(): InputStream
+
+  def outputStream(append: Boolean = false): OutputStream
+
+  def getFile: File
+}
+
+
+object RichReader
+{
+  implicit def wrapReader(reader: BufferedReader) = new RichReader(reader)
+
+  implicit def wrapReader(reader: Reader) = new RichReader(reader)
+}
+
+
+class RichReader(reader: BufferedReader) {
+
+  def this(reader: Reader) = this(new BufferedReader(reader))
+
+  /**
+    * Process all lines. The last value passed to proc will be null.
+    */
+  def foreach[U](proc: String => U): Unit = {
+    while (true) {
+      val line = reader.readLine()
+      proc(line)
+      if (line.isEmpty()) return
+    }
+  }
+}
+
+object IOUtils {
+
+  /**
+    * Map from file suffix (without "." dot) to output stream wrapper
+    */
+  val zippers = Map[String, OutputStream => OutputStream] (
+    "gz" -> { new GZIPOutputStream(_) },
+    "bz2" -> { new BZip2CompressorOutputStream(_) }
+  )
+
+  /**
+    * Map from file suffix (without "." dot) to input stream wrapper
+    */
+  val unzippers = Map[String, InputStream => InputStream] (
+    "gz" -> { new GZIPInputStream(_) },
+    "bz2" -> { new BZip2CompressorInputStream(_, true) }
+  )
+
+  /**
+    * use opener on file, wrap in un/zipper stream if necessary
+    */
+  private def open[T](file: FileLike[_], opener: FileLike[_] => T, wrappers: Map[String, T => T]): T = {
+    val name = file.name
+    val suffix = name.substring(name.lastIndexOf('.') + 1)
+    wrappers.getOrElse(suffix, identity[T] _)(opener(file))
+  }
+
+  /**
+    * open output stream, wrap in zipper stream if file suffix indicates compressed file.
+    */
+  def outputStream(file: FileLike[_], append: Boolean = false): OutputStream =
+    open(file, _.outputStream(append), zippers)
+
+  /**
+    * open input stream, wrap in unzipper stream if file suffix indicates compressed file.
+    */
+  def inputStream(file: FileLike[_]): InputStream =
+    open(file, _.inputStream(), unzippers)
+
+  /**
+    * open output stream, wrap in zipper stream if file suffix indicates compressed file,
+    * wrap in writer.
+    */
+  def writer(file: FileLike[_], append: Boolean = false, charset: Charset = Codec.UTF8.charSet): Writer =
+    new OutputStreamWriter(outputStream(file, append), charset)
+
+  /**
+    * open input stream, wrap in unzipper stream if file suffix indicates compressed file,
+    * wrap in reader.
+    */
+  def reader(file: FileLike[_], charset: Charset = Codec.UTF8.charSet): Reader =
+    new InputStreamReader(inputStream(file), charset)
+
+  /**
+    * open input stream, wrap in unzipper stream if file suffix indicates compressed file,
+    * wrap in reader, wrap in buffered reader, process all lines. The last value passed to
+    * proc will be null.
+    */
+  def readLines(file: FileLike[_], charset: Charset = Codec.UTF8.charSet)(proc: String => Unit): Unit = {
+    val reader: Reader = this.reader(file)
+
+    import RichReader._
+    try {
+
+      for (line <- reader) {
+        proc(line)
+      }
+    }
+    finally reader.close()
+  }
+
+  /**
+    * Copy all bytes from input to output. Don't close any stream.
+    */
+  def copy(in: InputStream, out: OutputStream) : Unit = {
+    val buf = new Array[Byte](1 << 20) // 1 MB
+    while (true)
+    {
+      val read = in.read(buf)
+      if (read == -1)
+      {
+        out.flush
+        return
+      }
+      out.write(buf, 0, read)
+    }
+  }
+
+}
 
 object TripleOps {
 
   def main(args: Array[String]) = {
 
-    val input = "/home/mypc/Desktop/daad/sample.ttl"
+
+
+
+    val input = "/home/mypc/Desktop/daad/Datasets/*.ttl"
     val optionsList = args.drop(1).map { arg =>
       arg.dropWhile(_ == '-').split('=') match {
         case Array(opt, v) => (opt -> v)
@@ -123,7 +296,10 @@ object TripleOps {
         (newTriple._2._1, newTriple._1, newTriple._2._2 )
     }
 
-    predMapped.foreach(println)
+//   entity_rdd.coalesce(1,true).saveAsTextFile("Entity2id.txt")
+//    pred_rdd.coalesce(1,true).saveAsTextFile("Rel2id.txt")
+//    predMapped.coalesce(1,true).saveAsTextFile("Triple2id.txt")
+
 
 
 
