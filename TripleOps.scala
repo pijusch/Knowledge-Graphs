@@ -1,27 +1,28 @@
 package net.sansa_stack.examples.spark.rdf
 
-import org.apache.commons.compress.compressors.bzip2.{BZip2CompressorInputStream,BZip2CompressorOutputStream}
-import java.util.zip.{GZIPInputStream,GZIPOutputStream}
+import org.apache.commons.compress.compressors.bzip2.{BZip2CompressorInputStream, BZip2CompressorOutputStream}
+import java.util.zip.{GZIPInputStream, GZIPOutputStream}
 import java.io._
+
 import scala.io.Codec
 import java.nio.charset.Charset
-
-
 import java.net.{URI => JavaURI}
+
 import net.sansa_stack.rdf.spark.io.NTripleReader
 import net.sansa_stack.rdf.spark.model.{JenaSparkRDDOps, TripleRDD}
 import org.apache.jena.graph.{Node, Node_URI}
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.SparkSession
+
 import scala.collection.JavaConversions
 import scala.collection.mutable
-
-
 import scala.language.implicitConversions
-import java.io.{Reader,BufferedReader}
-
-
+import java.io.{BufferedReader, Reader}
 import java.io.{File, InputStream, OutputStream}
+import java.nio.file.{Files, Paths}
+
+import org.apache.jena.graph
+import org.apache.jena.riot.{Lang, RDFDataMgr}
 
 import scala.util.Try
 
@@ -113,7 +114,7 @@ object IOUtils {
     * use opener on file, wrap in un/zipper stream if necessary
     */
   private def open[T](file: FileLike[_], opener: FileLike[_] => T, wrappers: Map[String, T => T]): T = {
-    val name = file.name
+    val name: String = file.name
     val suffix = name.substring(name.lastIndexOf('.') + 1)
     wrappers.getOrElse(suffix, identity[T] _)(opener(file))
   }
@@ -185,38 +186,93 @@ object TripleOps {
 
   def main(args: Array[String]) = {
 
+    val fin: InputStream = Files.newInputStream(Paths.get("/home/mypc/Desktop/daad/Datasets/sample.ttl.bz2"))
+    val in: BufferedInputStream = new BufferedInputStream(fin)
+    val bzIn: BZip2CompressorInputStream = new BZip2CompressorInputStream(in)
+
+
+    val reader: BufferedReader =new BufferedReader(new InputStreamReader(bzIn,Codec.UTF8.charSet))
+
+    var count = -1
+    val a = Iterator.continually(reader.readLine()).takeWhile { r =>
+      count += 1
+      r!=null
+    }.toSeq
+    a.init.filterNot(_ == null) -> (a.last != null)
 
 
 
-    val input = "/home/mypc/Desktop/daad/Datasets/*.ttl"
-    val optionsList = args.drop(1).map { arg =>
-      arg.dropWhile(_ == '-').split('=') match {
-        case Array(opt, v) => (opt -> v)
-        case _             => throw new IllegalArgumentException("Invalid argument: " + arg)
-      }
-    }
-    val options = mutable.Map(optionsList: _*)
+    import RichReader._
 
-    options.foreach {
-      case (opt, _) => throw new IllegalArgumentException("Invalid option: " + opt)
-    }
+    val sparkSession=SparkSession.builder
+      .master("local[*]")
+      .config("spark.serializer", "org.apache.spark.serializer.KryoSerializer")
+      .appName("Triple to ID Mapper ()")
+      .getOrCreate()
+
+    var rdd: RDD[String] = sparkSession.sparkContext.parallelize(a)
+
+
+
+    var triplesRDD = rdd.map(f = line =>
+      RDFDataMgr.createIteratorTriples(new ByteArrayInputStream(line.getBytes), Lang.NTRIPLES, null).next())
+
+
+
+
+
+
+    //println(temp)
+
+//    val temp = sparkSession.sparkContext.parallelize()
+
+
+//    val inputStreamBz2: InputStream = IOUtils.inputStream(file = new FileLike[] {
+//      override def toString: String = {
+//          return "/home/mypc/Desktop/daad/Datasets/persondata_en.ttl.bz2"
+//      }
+//      override def name: String = {
+//        return "persondata_en.ttl.bz2"
+//      }
+//    })
+
+
+
+
+
+
+
+//    val input = "/home/mypc/Desktop/daad/Datasets/*.ttl"
+//    val optionsList = args.drop(1).map { arg =>
+//      arg.dropWhile(_ == '-').split('=') match {
+//        case Array(opt, v) => (opt -> v)
+//        case _             => throw new IllegalArgumentException("Invalid argument: " + arg)
+//      }
+//    }
+//    val options = mutable.Map(optionsList: _*)
+//
+//    options.foreach {
+//      case (opt, _) => throw new IllegalArgumentException("Invalid option: " + opt)
+//    }
     println("======================================")
     println("|        Triple Ops example       |")
     println("======================================")
 
-    val sparkSession = SparkSession.builder
-      .master("local[*]")
-      .config("spark.serializer", "org.apache.spark.serializer.KryoSerializer")
-      .appName("Triple Ops example (" + input + ")")
-      .getOrCreate()
-
-    val ops = JenaSparkRDDOps(sparkSession.sparkContext)
-    import ops._
-
-    val triplesRDD = NTripleReader.load(sparkSession, JavaURI.create(input))
-
-
+//    val sparkSession = SparkSession.builder
+//      .master("local[*]")
+//      .config("spark.serializer", "org.apache.spark.serializer.KryoSerializer")
+//      .appName("Triple Ops example (" + input + ")")
+//      .getOrCreate()
+//
+//    val ops = JenaSparkRDDOps(sparkSession.sparkContext)
+//    import ops._
+//
+//    val triplesRDD = NTripleReader.load(sparkSession, JavaURI.create(input))
+//
+//
     val graph: TripleRDD = triplesRDD
+
+
 
 //    //Triples filtered by subject ( "http://dbpedia.org/resource/Charles_Dickens" )
 //    println("All triples related to Dickens:\n" + graph.find(URI("http://dbpedia.org/resource/Charles_Dickens"), ANY, ANY).collect().mkString("\n"))
