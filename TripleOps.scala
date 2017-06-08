@@ -204,8 +204,10 @@ object TripleOps {
       .getOrCreate()
 
 
-    val langID=List("en")  //List("en","de","es","fr","ja","nl")
-    val whiteList=List("mappingbased_objects_disjoint_domain")
+    val langID= List("en","de","es","fr","ja","nl")
+    val whiteList = List("mappingbased_objects_disjoint_domain","topical_concepts")
+    //val whiteList=List("anchor_text","article_categories","article_templates","category_labels","citation_data","citation_links","cited_facts","disambiguations","external_links","freebase_links","french_population","genders","geo_coordinates","geo_coordinates_mappingbased","geonames_links","homepages","images","infobox_properties","infobox_properties_mapped","infobox_properties_definitions","infobox_test","instance_types","instance_types_dbtax_dbo"
+    //    ,"instance_types_dbtax_ext","instance_types_lhd_dbo","instance_types_lhd_ext","instance_types_sdtyped_dbo","instance_types_transitive","interlanguage_links","interlanguage_links_chapters","labels","long_abstracts","mappingbased_literals")
 
 
     for(lang<-langID){
@@ -280,7 +282,9 @@ object TripleOps {
       for(filename<-whiteList) {
 
           val path = "/home/mypc/Downloads/datasets/".concat(lang).concat("/").concat(filename).concat("_").concat(lang).concat(".ttl.bz2")
-          val fin = Files.newInputStream(Paths.get(path))
+          val file = new File(path)
+          val fin: InputStream = Files.newInputStream(Paths.get(path))
+        if(file.isFile()) {
           val in = new BufferedInputStream(fin)
           val bzIn = new BZip2CompressorInputStream(in)
           val reader = new BufferedReader(new InputStreamReader(bzIn, Codec.UTF8.charSet))
@@ -289,69 +293,68 @@ object TripleOps {
           }.toSeq
           a.init.filterNot(_ == null) -> (a.last != null)
           var rdd = sparkSession.sparkContext.parallelize(a)
-          rdd = rdd.filter(x => (x.charAt(0)=='<'))
+          rdd = rdd.filter(x => (x.charAt(0) == '<'))
           val triplesRDD = rdd.map(line =>
             RDFDataMgr.createIteratorTriples(new ByteArrayInputStream(line.getBytes), Lang.NTRIPLES, null).next())
 
           val grph: TripleRDD = triplesRDD
 
-          var blank_s  = grph.filterSubjects(_.isBlank())
-            var blank_o = grph.filterObjects(_.isBlank())
+          var blank_s = grph.filterSubjects(_.isBlank())
+          var blank_o = grph.filterObjects(_.isBlank())
 
-            var blank = blank_o.union(blank_s).distinct()
-
-
-
-            var temp: TripleRDD = grph.filterObjects(_.isLiteral())
-
-            var literals = temp.filterSubjects(_.isURI())
-
-            temp = grph.filterObjects(_.isURI())
-
-            var normal: RDD[(Node, Node, Node)] = temp.filterSubjects(_.isURI()).map(x => (x.getSubject, x.getPredicate, x.getObject))
-
-            var subjects = grph.getSubjects.filter(_.isURI)
-
-            var objects = grph.getObjects.filter(_.isURI)
-
-            var entities = subjects.union(objects).distinct()
+          var blank = blank_o.union(blank_s).distinct()
 
 
-            val subjectKeyTriples = normal.map(x => (x._1, (x._2, x._3)))
+          var temp: TripleRDD = grph.filterObjects(_.isLiteral())
+
+          var literals = temp.filterSubjects(_.isURI())
+
+          temp = grph.filterObjects(_.isURI())
+
+          var normal: RDD[(Node, Node, Node)] = temp.filterSubjects(_.isURI()).map(x => (x.getSubject, x.getPredicate, x.getObject))
+
+          var subjects = grph.getSubjects.filter(_.isURI)
+
+          var objects = grph.getObjects.filter(_.isURI)
+
+          var entities = subjects.union(objects).distinct()
 
 
-            val joinedBySubject: RDD[(Node, (Long, (Node, Node)))] = entity_rdd.join(subjectKeyTriples)
-
-            val subjectMapped: RDD[(Long, Node, Node)] = joinedBySubject.map{
-              case (oldSubject: Node, newTriple: (Long, (Node, Node))) =>
-                (newTriple._1, newTriple._2._1, newTriple._2._2)
-            }
-
-            val objectKeyTriples: RDD[(Node, (Long, Node))] = subjectMapped.map(x => (x._3, (x._1,x._2)))
-
-            val joinedByObject: RDD[(Node, (Long, (Long, Node)))] = entity_rdd.join(objectKeyTriples)
-
-            val objectMapped: RDD[(Long, Node, Long)] = joinedByObject.map{
-              case (oldObject: Node, newTriple: (Long, (Long, Node))) =>
-                (newTriple._2._1,newTriple._2._2,newTriple._1)
-            }
+          val subjectKeyTriples = normal.map(x => (x._1, (x._2, x._3)))
 
 
-            val predKeyTriples: RDD[(Node, (Long, Long))] = objectMapped.map(x => (x._2,(x._1,x._3)))
+          val joinedBySubject: RDD[(Node, (Long, (Node, Node)))] = entity_rdd.join(subjectKeyTriples)
 
-            val joinedByPred = pred_rdd.join(predKeyTriples)
+          val subjectMapped: RDD[(Long, Node, Node)] = joinedBySubject.map {
+            case (oldSubject: Node, newTriple: (Long, (Node, Node))) =>
+              (newTriple._1, newTriple._2._1, newTriple._2._2)
+          }
 
-            val predMapped = joinedByPred.map{
-              case (oldPred: Node_URI, newTriple: (Long, (Long, Long))) =>
-                (newTriple._2._1, newTriple._1, newTriple._2._2 )
-            }
+          val objectKeyTriples: RDD[(Node, (Long, Node))] = subjectMapped.map(x => (x._3, (x._1, x._2)))
 
-        //   entity_rdd.coalesce(1,true).saveAsTextFile("Entity2id.txt")
-        //    pred_rdd.coalesce(1,true).saveAsTextFile("Rel2id.txt")
-           predMapped.coalesce(1,true).saveAsTextFile("/home/mypc/Downloads/datasets/".concat(lang).concat("/").concat("Triple2id").concat(filename))
+          val joinedByObject: RDD[(Node, (Long, (Long, Node)))] = entity_rdd.join(objectKeyTriples)
+
+          val objectMapped: RDD[(Long, Node, Long)] = joinedByObject.map {
+            case (oldObject: Node, newTriple: (Long, (Long, Node))) =>
+              (newTriple._2._1, newTriple._2._2, newTriple._1)
+          }
 
 
+          val predKeyTriples: RDD[(Node, (Long, Long))] = objectMapped.map(x => (x._2, (x._1, x._3)))
 
+          val joinedByPred = pred_rdd.join(predKeyTriples)
+
+          val predMapped = joinedByPred.map {
+            case (oldPred: Node_URI, newTriple: (Long, (Long, Long))) =>
+              (newTriple._2._1, newTriple._1, newTriple._2._2)
+          }
+
+          //   entity_rdd.coalesce(1,true).saveAsTextFile("Entity2id.txt")
+          //    pred_rdd.coalesce(1,true).saveAsTextFile("Rel2id.txt")
+          predMapped.coalesce(1, true).saveAsTextFile("/home/mypc/Downloads/datasets/".concat(lang).concat("/").concat(filename))
+
+
+        }
 
         }
 
